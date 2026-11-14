@@ -1,0 +1,665 @@
+--[[
+	AdminPanelUI (UI ONLY)
+	Put this as a LocalScript inside StarterPlayer > StarterPlayerScripts
+	Toggle the panel with RightShift (or the close button).
+
+	All buttons call functions inside the `Actions` table near the top.
+	Right now they only print. Later we fill them in (and make them
+	call RemoteEvents that the SERVER checks for your UserId).
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local TOGGLE_KEY = Enum.KeyCode.RightShift
+
+----------------------------------------------------------------------
+-- ACTIONS (placeholders - we will add real functions later)
+----------------------------------------------------------------------
+local Actions = {}
+
+local function stub(name)
+	return function(...)
+		print("[AdminPanel] " .. name, ...)
+	end
+end
+
+Actions.SetWalkSpeed = stub("SetWalkSpeed")
+Actions.SetJumpPower = stub("SetJumpPower")
+Actions.ToggleFly = stub("ToggleFly")
+Actions.ToggleNoclip = stub("ToggleNoclip")
+Actions.ToggleGodMode = stub("ToggleGodMode")
+Actions.ResetCharacter = stub("ResetCharacter")
+
+Actions.TeleportTo = stub("TeleportTo")
+Actions.BringPlayer = stub("BringPlayer")
+Actions.TeleportToCoords = stub("TeleportToCoords")
+
+Actions.SetTime = stub("SetTime")
+Actions.SetGravity = stub("SetGravity")
+Actions.ToggleFullbright = stub("ToggleFullbright")
+
+Actions.KickPlayer = stub("KickPlayer")
+Actions.BanPlayer = stub("BanPlayer")
+Actions.FreezePlayer = stub("FreezePlayer")
+
+Actions.Announce = stub("Announce")
+Actions.ShutdownServer = stub("ShutdownServer")
+Actions.RefreshPlayers = stub("RefreshPlayers")
+
+----------------------------------------------------------------------
+-- THEME
+----------------------------------------------------------------------
+local C = {
+	bg = Color3.fromRGB(24, 25, 31),
+	top = Color3.fromRGB(32, 34, 42),
+	side = Color3.fromRGB(28, 29, 36),
+	card = Color3.fromRGB(38, 40, 50),
+	cardHover = Color3.fromRGB(48, 51, 63),
+	accent = Color3.fromRGB(88, 130, 255),
+	danger = Color3.fromRGB(235, 87, 87),
+	text = Color3.fromRGB(235, 237, 245),
+	sub = Color3.fromRGB(150, 155, 172),
+	stroke = Color3.fromRGB(55, 58, 72),
+}
+
+local FONT = Enum.Font.GothamMedium
+local FONT_BOLD = Enum.Font.GothamBold
+
+----------------------------------------------------------------------
+-- HELPERS
+----------------------------------------------------------------------
+local function new(class, props, children)
+	local inst = Instance.new(class)
+	local parent = props.Parent
+	props.Parent = nil
+	for k, v in pairs(props) do
+		inst[k] = v
+	end
+	for _, child in ipairs(children or {}) do
+		child.Parent = inst
+	end
+	inst.Parent = parent
+	return inst
+end
+
+local function corner(r)
+	return new("UICorner", { CornerRadius = UDim.new(0, r or 8) })
+end
+
+local function stroke(color, thickness)
+	return new("UIStroke", {
+		Color = color or C.stroke,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	})
+end
+
+local function padding(p)
+	return new("UIPadding", {
+		PaddingTop = UDim.new(0, p),
+		PaddingBottom = UDim.new(0, p),
+		PaddingLeft = UDim.new(0, p),
+		PaddingRight = UDim.new(0, p),
+	})
+end
+
+local function tween(obj, props, t)
+	TweenService:Create(obj, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad), props):Play()
+end
+
+local function hover(btn, normal, over)
+	btn.MouseEnter:Connect(function()
+		tween(btn, { BackgroundColor3 = over })
+	end)
+	btn.MouseLeave:Connect(function()
+		tween(btn, { BackgroundColor3 = normal })
+	end)
+end
+
+----------------------------------------------------------------------
+-- SCREEN GUI + MAIN WINDOW
+----------------------------------------------------------------------
+local old = playerGui:FindFirstChild("AdminPanel")
+if old then
+	old:Destroy()
+end
+
+local gui = new("ScreenGui", {
+	Name = "AdminPanel",
+	ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	DisplayOrder = 100,
+	ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets, -- keeps UI out of phone notches
+	Parent = playerGui,
+})
+
+local FULL_SIZE = UDim2.fromOffset(560, 360)
+local TOP_HEIGHT = 36
+
+local main = new("Frame", {
+	Name = "Main",
+	Size = FULL_SIZE,
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0.5, -180),
+	BackgroundColor3 = C.bg,
+	BorderSizePixel = 0,
+	ClipsDescendants = true,
+	Parent = gui,
+}, { corner(10), stroke() })
+
+----------------------------------------------------------------------
+-- AUTO SCALE (so it fits on phones / small screens)
+----------------------------------------------------------------------
+local uiScale = new("UIScale", { Parent = main })
+local camera = workspace.CurrentCamera
+local userMoved = false
+local clampToScreen -- defined in the dragging section
+
+local function recenter()
+	main.Position = UDim2.new(0.5, 0, 0.5, -(FULL_SIZE.Y.Offset * uiScale.Scale) / 2)
+end
+
+local function updateScale()
+	local view = camera.ViewportSize
+	local s = math.min((view.X - 24) / FULL_SIZE.X.Offset, (view.Y - 24) / FULL_SIZE.Y.Offset, 1)
+	uiScale.Scale = math.clamp(s, 0.45, 1)
+	if not userMoved then
+		recenter()
+	elseif clampToScreen then
+		clampToScreen(main)
+	end
+end
+
+do
+	local t = 0
+	while camera.ViewportSize.X <= 1 and t < 2 do -- wait for a real viewport size
+		t += task.wait()
+	end
+end
+updateScale()
+camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateScale)
+
+-- Top bar
+local topBar = new("Frame", {
+	Name = "TopBar",
+	Size = UDim2.new(1, 0, 0, TOP_HEIGHT),
+	BackgroundColor3 = C.top,
+	BorderSizePixel = 0,
+	Parent = main,
+})
+
+local titleLabel = new("TextLabel", {
+	Size = UDim2.new(1, -90, 1, 0),
+	Position = UDim2.fromOffset(14, 0),
+	BackgroundTransparency = 1,
+	Text = "Admin Panel",
+	Font = FONT_BOLD,
+	TextSize = 15,
+	TextColor3 = C.text,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Parent = topBar,
+})
+
+local function topButton(text, xOffset, color)
+	local b = new("TextButton", {
+		Size = UDim2.fromOffset(32, 26),
+		Position = UDim2.new(1, xOffset, 0.5, -13),
+		BackgroundColor3 = C.card,
+		Text = text,
+		Font = FONT_BOLD,
+		TextSize = 14,
+		TextColor3 = C.text,
+		AutoButtonColor = false,
+		Parent = topBar,
+	}, { corner(6) })
+	hover(b, C.card, color)
+	return b
+end
+
+local minimizeBtn = topButton("-", -72, C.cardHover)
+local closeBtn = topButton("X", -36, C.danger)
+
+-- Body
+local body = new("Frame", {
+	Name = "Body",
+	Size = UDim2.new(1, 0, 1, -TOP_HEIGHT),
+	Position = UDim2.fromOffset(0, TOP_HEIGHT),
+	BackgroundTransparency = 1,
+	Parent = main,
+})
+
+local sidebar = new("Frame", {
+	Name = "Sidebar",
+	Size = UDim2.new(0, 130, 1, 0),
+	BackgroundColor3 = C.side,
+	BorderSizePixel = 0,
+	Parent = body,
+}, {
+	padding(8),
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+})
+
+local content = new("Frame", {
+	Name = "Content",
+	Size = UDim2.new(1, -130, 1, 0),
+	Position = UDim2.fromOffset(130, 0),
+	BackgroundTransparency = 1,
+	Parent = body,
+})
+
+----------------------------------------------------------------------
+-- DRAGGING
+----------------------------------------------------------------------
+-- Keeps a GuiObject from being dragged off-screen (so you can never lose it)
+clampToScreen = function(target)
+	local screenSize = gui.AbsoluteSize
+	local screenPos = gui.AbsolutePosition
+	local size = target.AbsoluteSize
+	local pos = target.AbsolutePosition - screenPos
+	local keep = 40 -- pixels that must stay visible
+	local dx, dy = 0, 0
+
+	if pos.X + size.X < keep then
+		dx = keep - (pos.X + size.X)
+	elseif pos.X > screenSize.X - keep then
+		dx = (screenSize.X - keep) - pos.X
+	end
+
+	if pos.Y < 0 then
+		dy = -pos.Y
+	elseif pos.Y > screenSize.Y - keep then
+		dy = (screenSize.Y - keep) - pos.Y
+	end
+
+	if dx ~= 0 or dy ~= 0 then
+		target.Position = target.Position + UDim2.fromOffset(dx, dy)
+	end
+end
+
+-- Makes `target` draggable by grabbing `handle`.
+-- If `onClick` is given, it fires when the handle is clicked WITHOUT dragging.
+local function makeDraggable(handle, target, onClick)
+	local dragging = false
+	local dragStart, startPos
+	local moved = 0
+
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			moved = 0
+			dragStart = input.Position
+			startPos = target.Position
+
+			local conn
+			conn = input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					conn:Disconnect()
+					if onClick and moved < 6 then
+						onClick()
+					end
+				end
+			end)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			moved = math.max(moved, delta.Magnitude)
+			target.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+			clampToScreen(target)
+			if target == main and moved > 6 then
+				userMoved = true
+			end
+		end
+	end)
+end
+
+makeDraggable(titleLabel, main)
+makeDraggable(topBar, main)
+
+----------------------------------------------------------------------
+-- PAGES + TABS
+----------------------------------------------------------------------
+local pages = {}
+local tabButtons = {}
+
+local function selectTab(name)
+	for pageName, page in pairs(pages) do
+		page.Visible = (pageName == name)
+	end
+	for tabName, btn in pairs(tabButtons) do
+		local active = (tabName == name)
+		tween(btn, {
+			BackgroundColor3 = active and C.accent or C.side,
+			TextColor3 = active and Color3.new(1, 1, 1) or C.sub,
+		})
+	end
+end
+
+local function createPage(name, order)
+	local page = new("ScrollingFrame", {
+		Name = name,
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = C.stroke,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false,
+		Parent = content,
+	}, {
+		padding(12),
+		new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	pages[name] = page
+
+	local tab = new("TextButton", {
+		Name = name,
+		Size = UDim2.new(1, 0, 0, 32),
+		BackgroundColor3 = C.side,
+		Text = name,
+		Font = FONT,
+		TextSize = 13,
+		TextColor3 = C.sub,
+		AutoButtonColor = false,
+		LayoutOrder = order,
+		Parent = sidebar,
+	}, { corner(6) })
+	tabButtons[name] = tab
+	tab.MouseButton1Click:Connect(function()
+		selectTab(name)
+	end)
+
+	return page
+end
+
+----------------------------------------------------------------------
+-- COMPONENTS
+----------------------------------------------------------------------
+local layoutCounter = 0
+local function nextOrder()
+	layoutCounter += 1
+	return layoutCounter
+end
+
+local function section(page, text)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 18),
+		BackgroundTransparency = 1,
+		Text = string.upper(text),
+		Font = FONT_BOLD,
+		TextSize = 11,
+		TextColor3 = C.sub,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = nextOrder(),
+		Parent = page,
+	})
+end
+
+local function button(page, text, callback, color)
+	color = color or C.card
+	local b = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 34),
+		BackgroundColor3 = color,
+		Text = text,
+		Font = FONT,
+		TextSize = 13,
+		TextColor3 = C.text,
+		AutoButtonColor = false,
+		LayoutOrder = nextOrder(),
+		Parent = page,
+	}, { corner(6) })
+	hover(b, color, color == C.danger and Color3.fromRGB(255, 110, 110) or C.cardHover)
+	b.MouseButton1Click:Connect(function()
+		if callback then
+			callback()
+		end
+	end)
+	return b
+end
+
+-- Label + text box + action button in one row
+local function inputRow(page, labelText, placeholder, buttonText, callback, color)
+	local row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 38),
+		BackgroundColor3 = C.card,
+		LayoutOrder = nextOrder(),
+		Parent = page,
+	}, { corner(6) })
+
+	new("TextLabel", {
+		Size = UDim2.new(0, 110, 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1,
+		Text = labelText,
+		Font = FONT,
+		TextSize = 13,
+		TextColor3 = C.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Parent = row,
+	})
+
+	local box = new("TextBox", {
+		Size = UDim2.new(1, -230, 0, 26),
+		Position = UDim2.new(0, 120, 0.5, -13),
+		BackgroundColor3 = C.bg,
+		Text = "",
+		PlaceholderText = placeholder or "",
+		PlaceholderColor3 = C.sub,
+		Font = FONT,
+		TextSize = 13,
+		TextColor3 = C.text,
+		ClearTextOnFocus = false,
+		Parent = row,
+	}, { corner(5), stroke() })
+
+	local btnColor = color or C.accent
+	local b = new("TextButton", {
+		Size = UDim2.fromOffset(86, 26),
+		Position = UDim2.new(1, -94, 0.5, -13),
+		BackgroundColor3 = btnColor,
+		Text = buttonText or "Apply",
+		Font = FONT_BOLD,
+		TextSize = 12,
+		TextColor3 = Color3.new(1, 1, 1),
+		AutoButtonColor = false,
+		Parent = row,
+	}, { corner(5) })
+	hover(b, btnColor, btnColor:Lerp(Color3.new(1, 1, 1), 0.15))
+
+	b.MouseButton1Click:Connect(function()
+		if callback then
+			callback(box.Text)
+		end
+	end)
+
+	return box
+end
+
+local function toggle(page, text, callback)
+	local state = false
+
+	local row = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 38),
+		BackgroundColor3 = C.card,
+		Text = "",
+		AutoButtonColor = false,
+		LayoutOrder = nextOrder(),
+		Parent = page,
+	}, { corner(6) })
+	hover(row, C.card, C.cardHover)
+
+	new("TextLabel", {
+		Size = UDim2.new(1, -70, 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		Font = FONT,
+		TextSize = 13,
+		TextColor3 = C.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Parent = row,
+	})
+
+	local track = new("Frame", {
+		Size = UDim2.fromOffset(40, 20),
+		Position = UDim2.new(1, -50, 0.5, -10),
+		BackgroundColor3 = C.bg,
+		Parent = row,
+	}, { corner(10), stroke() })
+
+	local knob = new("Frame", {
+		Size = UDim2.fromOffset(14, 14),
+		Position = UDim2.fromOffset(3, 3),
+		BackgroundColor3 = C.sub,
+		Parent = track,
+	}, { corner(7) })
+
+	row.MouseButton1Click:Connect(function()
+		state = not state
+		tween(knob, {
+			Position = state and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3),
+			BackgroundColor3 = state and Color3.new(1, 1, 1) or C.sub,
+		})
+		tween(track, { BackgroundColor3 = state and C.accent or C.bg })
+		if callback then
+			callback(state)
+		end
+	end)
+end
+
+----------------------------------------------------------------------
+-- BUILD THE PAGES
+----------------------------------------------------------------------
+-- Player
+do
+	local p = createPage("Player", 1)
+	section(p, "Movement")
+	inputRow(p, "WalkSpeed", "16", "Set", Actions.SetWalkSpeed)
+	inputRow(p, "JumpPower", "50", "Set", Actions.SetJumpPower)
+	section(p, "Toggles")
+	toggle(p, "Fly", Actions.ToggleFly)
+	toggle(p, "Noclip", Actions.ToggleNoclip)
+	toggle(p, "God Mode", Actions.ToggleGodMode)
+	section(p, "Character")
+	button(p, "Reset Character", Actions.ResetCharacter)
+end
+
+-- Teleport
+do
+	local p = createPage("Teleport", 2)
+	section(p, "Players")
+	inputRow(p, "Go to player", "Username", "Teleport", Actions.TeleportTo)
+	inputRow(p, "Bring player", "Username", "Bring", Actions.BringPlayer)
+	section(p, "Coordinates")
+	inputRow(p, "Position", "x, y, z", "Teleport", Actions.TeleportToCoords)
+end
+
+-- World
+do
+	local p = createPage("World", 3)
+	section(p, "Environment")
+	inputRow(p, "Time of day", "14", "Set", Actions.SetTime)
+	inputRow(p, "Gravity", "196.2", "Set", Actions.SetGravity)
+	toggle(p, "Fullbright", Actions.ToggleFullbright)
+end
+
+-- Moderation
+do
+	local p = createPage("Moderation", 4)
+	section(p, "Target")
+	local target = inputRow(p, "Username", "Player name", "Freeze", function(name)
+		Actions.FreezePlayer(name)
+	end)
+	section(p, "Punish")
+	inputRow(p, "Kick reason", "Reason", "Kick", function(reason)
+		Actions.KickPlayer(target.Text, reason)
+	end, C.danger)
+	inputRow(p, "Ban reason", "Reason", "Ban", function(reason)
+		Actions.BanPlayer(target.Text, reason)
+	end, C.danger)
+end
+
+-- Server
+do
+	local p = createPage("Server", 5)
+	section(p, "Announcements")
+	inputRow(p, "Message", "Type message...", "Send", Actions.Announce)
+	section(p, "Server")
+	button(p, "Refresh Player List", Actions.RefreshPlayers)
+	button(p, "Shutdown Server", Actions.ShutdownServer, C.danger)
+end
+
+selectTab("Player")
+
+----------------------------------------------------------------------
+-- OPEN / CLOSE / MINIMIZE
+----------------------------------------------------------------------
+local minimized = false
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	body.Visible = not minimized
+	tween(main, {
+		Size = minimized and UDim2.fromOffset(FULL_SIZE.X.Offset, TOP_HEIGHT) or FULL_SIZE,
+	}, 0.2)
+end)
+
+-- Floating image button (shown when the panel is closed, draggable too)
+local openButton = new("ImageButton", {
+	Name = "OpenButton",
+	Size = UDim2.fromOffset(52, 52),
+	Position = UDim2.new(0, 16, 0.25, 0), -- upper-left, clear of thumbstick/jump button
+	BackgroundColor3 = C.top,
+	Image = "rbxassetid://9432874158",
+	ScaleType = Enum.ScaleType.Fit,
+	AutoButtonColor = false,
+	Visible = false,
+	Parent = gui,
+}, {
+	corner(12),
+	stroke(C.accent, 2),
+	padding(6),
+})
+
+local function setPanelOpen(open)
+	main.Visible = open
+	openButton.Visible = not open
+end
+
+-- click (without dragging) opens the panel again
+makeDraggable(openButton, openButton, function()
+	setPanelOpen(true)
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	setPanelOpen(false)
+end)
+
+-- On phones/tablets (no keyboard) start with just the button so the
+-- panel doesn't cover the game; tap the button to open it.
+if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+	setPanelOpen(false)
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+	if input.KeyCode == TOGGLE_KEY then
+		setPanelOpen(not main.Visible)
+	end
+end)
