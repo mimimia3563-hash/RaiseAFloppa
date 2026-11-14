@@ -539,7 +539,7 @@ do
 
 	-- Auto farms: teleport your character onto each target part, one after another
 	local TELEPORT_DELAY = 0.25 -- seconds between each part (raise it if some don't register)
-	local GEM_NAMES = { Emerald = true, Ruby = true, Sapphire = true }
+	local GEM_NAMES = { Emerald = true, Ruby = true, Sapphire = true, Diamond = true }
 
 	local function getRoot()
 		local char = player.Character
