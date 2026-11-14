@@ -1,11 +1,10 @@
 --[[
-	AdminPanelUI (UI ONLY)
+	AdminPanelUI (UI ONLY - no functions yet)
 	Put this as a LocalScript inside StarterPlayer > StarterPlayerScripts
-	Toggle the panel with RightShift (or the close button).
+	Toggle the panel with RightShift (or the close button / image button).
 
-	All buttons call functions inside the `Actions` table near the top.
-	Right now they only print. Later we fill them in (and make them
-	call RemoteEvents that the SERVER checks for your UserId).
+	Tabs: Movement, Teleportation, Farm
+	Helpers for adding UI later: section(), button(), inputRow(), toggle()
 ]]
 
 local Players = game:GetService("Players")
@@ -16,40 +15,6 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local TOGGLE_KEY = Enum.KeyCode.RightShift
-
-----------------------------------------------------------------------
--- ACTIONS (placeholders - we will add real functions later)
-----------------------------------------------------------------------
-local Actions = {}
-
-local function stub(name)
-	return function(...)
-		print("[AdminPanel] " .. name, ...)
-	end
-end
-
-Actions.SetWalkSpeed = stub("SetWalkSpeed")
-Actions.SetJumpPower = stub("SetJumpPower")
-Actions.ToggleFly = stub("ToggleFly")
-Actions.ToggleNoclip = stub("ToggleNoclip")
-Actions.ToggleGodMode = stub("ToggleGodMode")
-Actions.ResetCharacter = stub("ResetCharacter")
-
-Actions.TeleportTo = stub("TeleportTo")
-Actions.BringPlayer = stub("BringPlayer")
-Actions.TeleportToCoords = stub("TeleportToCoords")
-
-Actions.SetTime = stub("SetTime")
-Actions.SetGravity = stub("SetGravity")
-Actions.ToggleFullbright = stub("ToggleFullbright")
-
-Actions.KickPlayer = stub("KickPlayer")
-Actions.BanPlayer = stub("BanPlayer")
-Actions.FreezePlayer = stub("FreezePlayer")
-
-Actions.Announce = stub("Announce")
-Actions.ShutdownServer = stub("ShutdownServer")
-Actions.RefreshPlayers = stub("RefreshPlayers")
 
 ----------------------------------------------------------------------
 -- THEME
@@ -542,68 +507,123 @@ local function toggle(page, text, callback)
 end
 
 ----------------------------------------------------------------------
--- BUILD THE PAGES
+-- BUILD THE PAGES (empty for now - add UI inside each one later)
 ----------------------------------------------------------------------
--- Player
-do
-	local p = createPage("Player", 1)
-	section(p, "Movement")
-	inputRow(p, "WalkSpeed", "16", "Set", Actions.SetWalkSpeed)
-	inputRow(p, "JumpPower", "50", "Set", Actions.SetJumpPower)
-	section(p, "Toggles")
-	toggle(p, "Fly", Actions.ToggleFly)
-	toggle(p, "Noclip", Actions.ToggleNoclip)
-	toggle(p, "God Mode", Actions.ToggleGodMode)
-	section(p, "Character")
-	button(p, "Reset Character", Actions.ResetCharacter)
+local function emptyNote(page)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 30),
+		BackgroundTransparency = 1,
+		Text = "Nothing here yet",
+		Font = FONT,
+		TextSize = 13,
+		TextColor3 = C.sub,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		LayoutOrder = nextOrder(),
+		Parent = page,
+	})
 end
 
--- Teleport
 do
-	local p = createPage("Teleport", 2)
-	section(p, "Players")
-	inputRow(p, "Go to player", "Username", "Teleport", Actions.TeleportTo)
-	inputRow(p, "Bring player", "Username", "Bring", Actions.BringPlayer)
-	section(p, "Coordinates")
-	inputRow(p, "Position", "x, y, z", "Teleport", Actions.TeleportToCoords)
-end
+	local movement = createPage("Movement", 1)
+	section(movement, "Stats")
+	inputRow(movement, "Speed", "16", "Set") -- function goes here later
+	inputRow(movement, "Jump", "50", "Set") -- function goes here later
+	section(movement, "Toggles")
+	toggle(movement, "Noclip") -- function goes here later
+	toggle(movement, "Fly") -- function goes here later
 
--- World
-do
-	local p = createPage("World", 3)
-	section(p, "Environment")
-	inputRow(p, "Time of day", "14", "Set", Actions.SetTime)
-	inputRow(p, "Gravity", "196.2", "Set", Actions.SetGravity)
-	toggle(p, "Fullbright", Actions.ToggleFullbright)
-end
+	local teleportation = createPage("Teleportation", 2)
+	emptyNote(teleportation)
 
--- Moderation
-do
-	local p = createPage("Moderation", 4)
-	section(p, "Target")
-	local target = inputRow(p, "Username", "Player name", "Freeze", function(name)
-		Actions.FreezePlayer(name)
+	local farm = createPage("Farm", 3)
+
+	-- Auto farms: teleport your character onto each target part, one after another
+	local TELEPORT_DELAY = 0.25 -- seconds between each part (raise it if some don't register)
+	local GEM_NAMES = { Emerald = true, Ruby = true, Sapphire = true }
+
+	local function getRoot()
+		local char = player.Character
+		return char and char:FindFirstChild("HumanoidRootPart")
+	end
+
+	-- getTargets() returns a list of parts to visit. Returns start() and stop().
+	local function makeFarm(getTargets)
+		local running = false
+
+		local function start()
+			if running then
+				return
+			end
+			running = true
+
+			task.spawn(function()
+				while running do
+					local didTeleport = false
+
+					for _, part in ipairs(getTargets()) do
+						if not running then
+							break
+						end
+						local root = getRoot()
+						if root and part:IsA("BasePart") and part.Parent then
+							root.CFrame = part.CFrame * CFrame.new(0, 2, 0)
+							didTeleport = true
+							task.wait(TELEPORT_DELAY)
+						end
+					end
+
+					if not didTeleport then
+						task.wait(0.5) -- nothing to visit right now, check again soon
+					end
+				end
+			end)
+		end
+
+		local function stop()
+			running = false
+		end
+
+		return start, stop
+	end
+
+	-- Seeds: every part inside workspace.Seeds
+	local function getSeeds()
+		local folder = workspace:FindFirstChild("Seeds")
+		return folder and folder:GetChildren() or {}
+	end
+
+	-- Gems: Emerald / Ruby / Sapphire parts directly in workspace (no folder)
+	local function getGems()
+		local list = {}
+		for _, child in ipairs(workspace:GetChildren()) do
+			if GEM_NAMES[child.Name] then
+				table.insert(list, child)
+			end
+		end
+		return list
+	end
+
+	local startSeeds, stopSeeds = makeFarm(getSeeds)
+	local startGems, stopGems = makeFarm(getGems)
+
+	section(farm, "Auto Farm")
+	toggle(farm, "Teleport to Seeds", function(state)
+		if state then
+			startSeeds()
+		else
+			stopSeeds()
+		end
 	end)
-	section(p, "Punish")
-	inputRow(p, "Kick reason", "Reason", "Kick", function(reason)
-		Actions.KickPlayer(target.Text, reason)
-	end, C.danger)
-	inputRow(p, "Ban reason", "Reason", "Ban", function(reason)
-		Actions.BanPlayer(target.Text, reason)
-	end, C.danger)
+	toggle(farm, "Teleport to Gems", function(state)
+		if state then
+			startGems()
+		else
+			stopGems()
+		end
+	end)
 end
 
--- Server
-do
-	local p = createPage("Server", 5)
-	section(p, "Announcements")
-	inputRow(p, "Message", "Type message...", "Send", Actions.Announce)
-	section(p, "Server")
-	button(p, "Refresh Player List", Actions.RefreshPlayers)
-	button(p, "Shutdown Server", Actions.ShutdownServer, C.danger)
-end
-
-selectTab("Player")
+selectTab("Movement")
 
 ----------------------------------------------------------------------
 -- OPEN / CLOSE / MINIMIZE
