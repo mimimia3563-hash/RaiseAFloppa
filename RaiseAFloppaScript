@@ -162,7 +162,7 @@ local titleLabel = new("TextLabel", {
 	Size = UDim2.new(1, -90, 1, 0),
 	Position = UDim2.fromOffset(14, 0),
 	BackgroundTransparency = 1,
-	Text = "Raise a Floppa Script",
+	Text = "Admin Panel",
 	Font = FONT_BOLD,
 	TextSize = 15,
 	TextColor3 = C.text,
@@ -533,7 +533,16 @@ do
 	toggle(movement, "Fly") -- function goes here later
 
 	local teleportation = createPage("Teleportation", 2)
-	emptyNote(teleportation)
+	local HOUSE_POSITION = Vector3.new(-64, 73, -41)
+
+	section(teleportation, "Places")
+	button(teleportation, "Teleport to House", function()
+		local char = player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if root then
+			root.CFrame = CFrame.new(HOUSE_POSITION)
+		end
+	end)
 
 	local farm = createPage("Farm", 3)
 
@@ -547,7 +556,7 @@ do
 	end
 
 	-- getTargets() returns a list of parts to visit. Returns start() and stop().
-	local function makeFarm(getTargets)
+	local function makeFarm(label, getTargets)
 		local running = false
 
 		local function start()
@@ -555,6 +564,7 @@ do
 				return
 			end
 			running = true
+			print("[Farm] " .. label .. " started, targets found: " .. #getTargets())
 
 			task.spawn(function()
 				while running do
@@ -565,10 +575,18 @@ do
 							break
 						end
 						local root = getRoot()
-						if root and part:IsA("BasePart") and part.Parent then
-							root.CFrame = part.CFrame * CFrame.new(0, 2, 0)
-							didTeleport = true
-							task.wait(TELEPORT_DELAY)
+						if root and part.Parent then
+							local cf
+							if part:IsA("BasePart") then
+								cf = part.CFrame
+							elseif part:IsA("Model") then
+								cf = part:GetPivot()
+							end
+							if cf then
+								root.CFrame = cf * CFrame.new(0, 2, 0)
+								didTeleport = true
+								task.wait(TELEPORT_DELAY)
+							end
 						end
 					end
 
@@ -592,19 +610,23 @@ do
 		return folder and folder:GetChildren() or {}
 	end
 
-	-- Gems: Emerald / Ruby / Sapphire parts directly in workspace (no folder)
+	-- Gems: anything named Emerald / Ruby / Sapphire / Diamond anywhere in workspace
+	-- (parts or models, inside folders/models too). Skips your own character.
 	local function getGems()
 		local list = {}
-		for _, child in ipairs(workspace:GetChildren()) do
-			if GEM_NAMES[child.Name] then
-				table.insert(list, child)
+		local myChar = player.Character
+		for _, inst in ipairs(workspace:GetDescendants()) do
+			if GEM_NAMES[inst.Name] and (inst:IsA("BasePart") or inst:IsA("Model")) then
+				if not (myChar and inst:IsDescendantOf(myChar)) then
+					table.insert(list, inst)
+				end
 			end
 		end
 		return list
 	end
 
-	local startSeeds, stopSeeds = makeFarm(getSeeds)
-	local startGems, stopGems = makeFarm(getGems)
+	local startSeeds, stopSeeds = makeFarm("Seeds", getSeeds)
+	local startGems, stopGems = makeFarm("Gems", getGems)
 
 	section(farm, "Auto Farm")
 	toggle(farm, "Teleport to Seeds", function(state)
