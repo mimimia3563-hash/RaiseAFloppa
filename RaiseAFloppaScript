@@ -1,10 +1,9 @@
 --[[
-	AdminPanelUI (UI ONLY - no functions yet)
+	AdminPanelUI
 	Put this as a LocalScript inside StarterPlayer > StarterPlayerScripts
-	Toggle the panel with RightShift (or the close button / image button).
 
+	Open / close: RightShift, the X button, or the floating image button.
 	Tabs: Movement, Teleportation, Farm
-	Helpers for adding UI later: section(), button(), inputRow(), toggle()
 ]]
 
 local Players = game:GetService("Players")
@@ -15,24 +14,30 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local TOGGLE_KEY = Enum.KeyCode.RightShift
+local OPEN_IMAGE = "rbxassetid://9432874158"
+local HOUSE_POSITION = Vector3.new(-64, 73, -41)
 
 ----------------------------------------------------------------------
 -- THEME
 ----------------------------------------------------------------------
 local C = {
-	bg = Color3.fromRGB(24, 25, 31),
-	top = Color3.fromRGB(32, 34, 42),
-	side = Color3.fromRGB(28, 29, 36),
-	card = Color3.fromRGB(38, 40, 50),
-	cardHover = Color3.fromRGB(48, 51, 63),
-	accent = Color3.fromRGB(88, 130, 255),
-	danger = Color3.fromRGB(235, 87, 87),
-	text = Color3.fromRGB(235, 237, 245),
-	sub = Color3.fromRGB(150, 155, 172),
-	stroke = Color3.fromRGB(55, 58, 72),
+	bg0 = Color3.fromRGB(12, 13, 19),
+	bg1 = Color3.fromRGB(24, 26, 38),
+	card = Color3.fromRGB(30, 32, 46),
+	cardHover = Color3.fromRGB(39, 42, 60),
+	field = Color3.fromRGB(17, 18, 27),
+	stroke = Color3.fromRGB(52, 56, 78),
+	accent = Color3.fromRGB(99, 102, 241),
+	accent2 = Color3.fromRGB(168, 85, 247),
+	text = Color3.fromRGB(240, 242, 252),
+	sub = Color3.fromRGB(138, 145, 172),
+	good = Color3.fromRGB(52, 211, 153),
+	danger = Color3.fromRGB(244, 63, 94),
+	track = Color3.fromRGB(52, 56, 78),
 }
 
-local FONT = Enum.Font.GothamMedium
+local FONT = Enum.Font.Gotham
+local FONT_MED = Enum.Font.GothamMedium
 local FONT_BOLD = Enum.Font.GothamBold
 
 ----------------------------------------------------------------------
@@ -56,38 +61,79 @@ local function corner(r)
 	return new("UICorner", { CornerRadius = UDim.new(0, r or 8) })
 end
 
-local function stroke(color, thickness)
+local function stroke(color, thickness, transparency)
 	return new("UIStroke", {
 		Color = color or C.stroke,
 		Thickness = thickness or 1,
+		Transparency = transparency or 0,
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 	})
 end
 
-local function padding(p)
+local function pad(top, bottom, left, right)
+	bottom = bottom or top
+	left = left or top
+	right = right or left
 	return new("UIPadding", {
-		PaddingTop = UDim.new(0, p),
-		PaddingBottom = UDim.new(0, p),
-		PaddingLeft = UDim.new(0, p),
-		PaddingRight = UDim.new(0, p),
+		PaddingTop = UDim.new(0, top),
+		PaddingBottom = UDim.new(0, bottom),
+		PaddingLeft = UDim.new(0, left),
+		PaddingRight = UDim.new(0, right),
 	})
 end
 
-local function tween(obj, props, t)
-	TweenService:Create(obj, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad), props):Play()
+local function gradient(c1, c2, rotation)
+	return new("UIGradient", {
+		Color = ColorSequence.new(c1, c2),
+		Rotation = rotation or 0,
+	})
 end
 
-local function hover(btn, normal, over)
+local function tween(obj, props, t, style, dir)
+	local tw = TweenService:Create(
+		obj,
+		TweenInfo.new(t or 0.15, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
+		props
+	)
+	tw:Play()
+	return tw
+end
+
+local layoutCounter = 0
+local function nextOrder()
+	layoutCounter += 1
+	return layoutCounter
+end
+
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+-- hover color + little "press" squish for any button
+local function pressable(btn, normal, over)
+	local s = new("UIScale", { Parent = btn })
 	btn.MouseEnter:Connect(function()
-		tween(btn, { BackgroundColor3 = over })
+		tween(btn, { BackgroundColor3 = over }, 0.12)
 	end)
 	btn.MouseLeave:Connect(function()
-		tween(btn, { BackgroundColor3 = normal })
+		tween(btn, { BackgroundColor3 = normal }, 0.12)
+		tween(s, { Scale = 1 }, 0.1)
+	end)
+	btn.InputBegan:Connect(function(input)
+		if isPress(input) then
+			tween(s, { Scale = 0.97 }, 0.08)
+		end
+	end)
+	btn.InputEnded:Connect(function(input)
+		if isPress(input) then
+			tween(s, { Scale = 1 }, 0.18, Enum.EasingStyle.Back)
+		end
 	end)
 end
 
 ----------------------------------------------------------------------
--- SCREEN GUI + MAIN WINDOW
+-- SCREEN GUI
 ----------------------------------------------------------------------
 local old = playerGui:FindFirstChild("AdminPanel")
 if old then
@@ -103,36 +149,127 @@ local gui = new("ScreenGui", {
 	Parent = playerGui,
 })
 
-local FULL_SIZE = UDim2.fromOffset(560, 360)
-local TOP_HEIGHT = 36
+----------------------------------------------------------------------
+-- TOASTS (little notifications at the top)
+----------------------------------------------------------------------
+local toastHolder = new("Frame", {
+	Name = "Toasts",
+	AnchorPoint = Vector2.new(0.5, 0),
+	Position = UDim2.new(0.5, 0, 0, 14),
+	Size = UDim2.fromOffset(320, 200),
+	BackgroundTransparency = 1,
+	ZIndex = 50,
+	Parent = gui,
+}, {
+	new("UIListLayout", {
+		Padding = UDim.new(0, 6),
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}),
+})
 
-local main = new("Frame", {
+local function toast(text, color)
+	color = color or C.accent
+
+	local t = new("CanvasGroup", {
+		Size = UDim2.fromOffset(0, 36),
+		AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundColor3 = C.bg1,
+		GroupTransparency = 1,
+		LayoutOrder = nextOrder(),
+		Parent = toastHolder,
+	}, {
+		corner(18),
+		stroke(color, 1, 0.35),
+		pad(0, 0, 14, 16),
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			Padding = UDim.new(0, 8),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+		new("Frame", {
+			Size = UDim2.fromOffset(8, 8),
+			BackgroundColor3 = color,
+			BorderSizePixel = 0,
+			LayoutOrder = 1,
+		}, { corner(4) }),
+		new("TextLabel", {
+			Size = UDim2.fromOffset(0, 36),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundTransparency = 1,
+			Text = text,
+			Font = FONT_MED,
+			TextSize = 13,
+			TextColor3 = C.text,
+			LayoutOrder = 2,
+		}),
+	})
+
+	tween(t, { GroupTransparency = 0 }, 0.2)
+	task.delay(2.2, function()
+		tween(t, { GroupTransparency = 1 }, 0.3)
+		task.wait(0.35)
+		t:Destroy()
+	end)
+end
+
+----------------------------------------------------------------------
+-- MAIN WINDOW
+----------------------------------------------------------------------
+local FULL_SIZE = UDim2.fromOffset(620, 400)
+local HEADER_H = 52
+local SIDEBAR_W = 156
+local BODY_H = FULL_SIZE.Y.Offset - HEADER_H
+
+local main = new("CanvasGroup", {
 	Name = "Main",
 	Size = FULL_SIZE,
 	AnchorPoint = Vector2.new(0.5, 0),
-	Position = UDim2.new(0.5, 0, 0.5, -180),
-	BackgroundColor3 = C.bg,
+	Position = UDim2.new(0.5, 0, 0.5, -200),
+	BackgroundTransparency = 1,
 	BorderSizePixel = 0,
-	ClipsDescendants = true,
+	GroupTransparency = 1,
+	Visible = false,
 	Parent = gui,
-}, { corner(10), stroke() })
+}, { corner(14) })
+
+-- background with soft gradient + glowing accent border
+new("Frame", {
+	Name = "Background",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Color3.new(1, 1, 1),
+	BorderSizePixel = 0,
+	Parent = main,
+}, {
+	corner(14),
+	gradient(C.bg1, C.bg0, 125),
+	new("UIStroke", {
+		Color = Color3.new(1, 1, 1),
+		Thickness = 1.5,
+		Transparency = 0.15,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, { gradient(C.accent, C.stroke, 125) }),
+})
 
 ----------------------------------------------------------------------
--- AUTO SCALE (so it fits on phones / small screens)
+-- AUTO SCALE (fits phones / small screens)
 ----------------------------------------------------------------------
 local uiScale = new("UIScale", { Parent = main })
 local camera = workspace.CurrentCamera
+local baseScale = 1
 local userMoved = false
 local clampToScreen -- defined in the dragging section
 
 local function recenter()
-	main.Position = UDim2.new(0.5, 0, 0.5, -(FULL_SIZE.Y.Offset * uiScale.Scale) / 2)
+	main.Position = UDim2.new(0.5, 0, 0.5, -(FULL_SIZE.Y.Offset * baseScale) / 2)
 end
 
 local function updateScale()
 	local view = camera.ViewportSize
 	local s = math.min((view.X - 24) / FULL_SIZE.X.Offset, (view.Y - 24) / FULL_SIZE.Y.Offset, 1)
-	uiScale.Scale = math.clamp(s, 0.45, 1)
+	baseScale = math.clamp(s, 0.45, 1)
+	uiScale.Scale = baseScale
 	if not userMoved then
 		recenter()
 	elseif clampToScreen then
@@ -149,78 +286,253 @@ end
 updateScale()
 camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateScale)
 
--- Top bar
-local topBar = new("Frame", {
-	Name = "TopBar",
-	Size = UDim2.new(1, 0, 0, TOP_HEIGHT),
-	BackgroundColor3 = C.top,
+----------------------------------------------------------------------
+-- HEADER
+----------------------------------------------------------------------
+local header = new("Frame", {
+	Name = "Header",
+	Size = UDim2.new(1, 0, 0, HEADER_H),
+	BackgroundColor3 = C.bg1,
+	BackgroundTransparency = 0.55,
 	BorderSizePixel = 0,
 	Parent = main,
 })
 
-local titleLabel = new("TextLabel", {
-	Size = UDim2.new(1, -90, 1, 0),
-	Position = UDim2.fromOffset(14, 0),
+new("Frame", { -- divider
+	AnchorPoint = Vector2.new(0, 1),
+	Position = UDim2.new(0, 0, 1, 0),
+	Size = UDim2.new(1, 0, 0, 1),
+	BackgroundColor3 = C.stroke,
+	BackgroundTransparency = 0.4,
+	BorderSizePixel = 0,
+	Parent = header,
+})
+
+-- logo badge
+new("Frame", {
+	Position = UDim2.fromOffset(16, 10),
+	Size = UDim2.fromOffset(32, 32),
+	BackgroundColor3 = Color3.new(1, 1, 1),
+	BorderSizePixel = 0,
+	Parent = header,
+}, {
+	corner(10),
+	gradient(C.accent, C.accent2, 45),
+	new("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "⚡",
+		TextSize = 17,
+		Font = FONT_BOLD,
+		TextColor3 = Color3.new(1, 1, 1),
+	}),
+})
+
+new("TextLabel", {
+	Position = UDim2.fromOffset(58, 9),
+	Size = UDim2.new(1, -170, 0, 18),
 	BackgroundTransparency = 1,
 	Text = "Admin Panel",
 	Font = FONT_BOLD,
 	TextSize = 15,
 	TextColor3 = C.text,
 	TextXAlignment = Enum.TextXAlignment.Left,
-	Parent = topBar,
+	Parent = header,
 })
 
-local function topButton(text, xOffset, color)
+local hint = "Welcome, " .. player.DisplayName
+if UserInputService.KeyboardEnabled then
+	hint ..= "  •  RightShift to toggle"
+end
+new("TextLabel", {
+	Position = UDim2.fromOffset(58, 27),
+	Size = UDim2.new(1, -170, 0, 15),
+	BackgroundTransparency = 1,
+	Text = hint,
+	Font = FONT,
+	TextSize = 11,
+	TextColor3 = C.sub,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	Parent = header,
+})
+
+local function headerButton(offsetX, kind, overColor)
 	local b = new("TextButton", {
-		Size = UDim2.fromOffset(32, 26),
-		Position = UDim2.new(1, xOffset, 0.5, -13),
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, offsetX, 0.5, 0),
+		Size = UDim2.fromOffset(32, 32),
 		BackgroundColor3 = C.card,
-		Text = text,
-		Font = FONT_BOLD,
-		TextSize = 14,
-		TextColor3 = C.text,
+		Text = "",
 		AutoButtonColor = false,
-		Parent = topBar,
-	}, { corner(6) })
-	hover(b, C.card, color)
+		Parent = header,
+	}, { corner(9) })
+
+	local function bar(rotation, width)
+		new("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(width, 2),
+			Rotation = rotation,
+			BackgroundColor3 = C.text,
+			BorderSizePixel = 0,
+			Parent = b,
+		}, { corner(1) })
+	end
+
+	if kind == "min" then
+		bar(0, 12)
+	else
+		bar(45, 14)
+		bar(-45, 14)
+	end
+
+	pressable(b, C.card, overColor)
 	return b
 end
 
-local minimizeBtn = topButton("-", -72, C.cardHover)
-local closeBtn = topButton("X", -36, C.danger)
+local closeBtn = headerButton(-14, "close", C.danger)
+local minimizeBtn = headerButton(-54, "min", C.cardHover)
 
--- Body
+----------------------------------------------------------------------
+-- BODY: SIDEBAR + CONTENT
+----------------------------------------------------------------------
 local body = new("Frame", {
 	Name = "Body",
-	Size = UDim2.new(1, 0, 1, -TOP_HEIGHT),
-	Position = UDim2.fromOffset(0, TOP_HEIGHT),
+	Position = UDim2.fromOffset(0, HEADER_H),
+	Size = UDim2.new(1, 0, 0, BODY_H),
 	BackgroundTransparency = 1,
 	Parent = main,
 })
 
 local sidebar = new("Frame", {
 	Name = "Sidebar",
-	Size = UDim2.new(0, 130, 1, 0),
-	BackgroundColor3 = C.side,
+	Size = UDim2.new(0, SIDEBAR_W, 1, 0),
+	BackgroundColor3 = C.bg0,
+	BackgroundTransparency = 0.45,
 	BorderSizePixel = 0,
 	Parent = body,
-}, {
-	padding(8),
-	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
 })
+
+new("Frame", { -- sidebar divider
+	AnchorPoint = Vector2.new(1, 0),
+	Position = UDim2.new(1, 0, 0, 0),
+	Size = UDim2.new(0, 1, 1, 0),
+	BackgroundColor3 = C.stroke,
+	BackgroundTransparency = 0.4,
+	BorderSizePixel = 0,
+	Parent = sidebar,
+})
+
+local tabsHolder = new("Frame", {
+	Size = UDim2.new(1, 0, 1, -72),
+	BackgroundTransparency = 1,
+	Parent = sidebar,
+}, {
+	pad(10),
+	new("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+})
+
+-- user card at the bottom of the sidebar
+do
+	local userCard = new("Frame", {
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 10, 1, -10),
+		Size = UDim2.new(1, -20, 0, 48),
+		BackgroundColor3 = C.card,
+		Parent = sidebar,
+	}, { corner(10), stroke(C.stroke, 1, 0.4) })
+
+	local avatar = new("ImageLabel", {
+		Position = UDim2.fromOffset(8, 8),
+		Size = UDim2.fromOffset(32, 32),
+		BackgroundColor3 = C.field,
+		Image = "",
+		Parent = userCard,
+	}, { corner(16) })
+
+	new("TextLabel", {
+		Position = UDim2.fromOffset(48, 8),
+		Size = UDim2.new(1, -54, 0, 16),
+		BackgroundTransparency = 1,
+		Text = player.DisplayName,
+		Font = FONT_BOLD,
+		TextSize = 12,
+		TextColor3 = C.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = userCard,
+	})
+
+	new("TextLabel", {
+		Position = UDim2.fromOffset(48, 25),
+		Size = UDim2.new(1, -54, 0, 14),
+		BackgroundTransparency = 1,
+		Text = "Admin",
+		Font = FONT_MED,
+		TextSize = 11,
+		TextColor3 = C.accent,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Parent = userCard,
+	})
+
+	task.spawn(function()
+		local ok, img = pcall(function()
+			return Players:GetUserThumbnailAsync(
+				player.UserId,
+				Enum.ThumbnailType.HeadShot,
+				Enum.ThumbnailSize.Size60x60
+			)
+		end)
+		if ok then
+			avatar.Image = img
+		end
+	end)
+end
 
 local content = new("Frame", {
 	Name = "Content",
-	Size = UDim2.new(1, -130, 1, 0),
-	Position = UDim2.fromOffset(130, 0),
+	Position = UDim2.fromOffset(SIDEBAR_W, 0),
+	Size = UDim2.new(1, -SIDEBAR_W, 1, 0),
 	BackgroundTransparency = 1,
 	Parent = body,
 })
 
+local pageTitle = new("TextLabel", {
+	Position = UDim2.fromOffset(20, 12),
+	Size = UDim2.new(1, -40, 0, 22),
+	BackgroundTransparency = 1,
+	Text = "",
+	Font = FONT_BOLD,
+	TextSize = 18,
+	TextColor3 = C.text,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Parent = content,
+})
+
+local pageSub = new("TextLabel", {
+	Position = UDim2.fromOffset(20, 35),
+	Size = UDim2.new(1, -40, 0, 16),
+	BackgroundTransparency = 1,
+	Text = "",
+	Font = FONT,
+	TextSize = 12,
+	TextColor3 = C.sub,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	Parent = content,
+})
+
+local pagesHolder = new("Frame", {
+	Position = UDim2.fromOffset(0, 62),
+	Size = UDim2.new(1, 0, 1, -62),
+	BackgroundTransparency = 1,
+	ClipsDescendants = true,
+	Parent = content,
+})
+
 ----------------------------------------------------------------------
--- DRAGGING
+-- DRAGGING (+ keep on screen)
 ----------------------------------------------------------------------
--- Keeps a GuiObject from being dragged off-screen (so you can never lose it)
 clampToScreen = function(target)
 	local screenSize = gui.AbsoluteSize
 	local screenPos = gui.AbsolutePosition
@@ -246,16 +558,14 @@ clampToScreen = function(target)
 	end
 end
 
--- Makes `target` draggable by grabbing `handle`.
--- If `onClick` is given, it fires when the handle is clicked WITHOUT dragging.
+-- Drag `target` by grabbing `handle`. `onClick` fires if released without dragging.
 local function makeDraggable(handle, target, onClick)
 	local dragging = false
 	local dragStart, startPos
 	local moved = 0
 
 	handle.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
+		if isPress(input) then
 			dragging = true
 			moved = 0
 			dragStart = input.Position
@@ -291,59 +601,125 @@ local function makeDraggable(handle, target, onClick)
 	end)
 end
 
-makeDraggable(titleLabel, main)
-makeDraggable(topBar, main)
+makeDraggable(header, main)
 
 ----------------------------------------------------------------------
--- PAGES + TABS
+-- TABS + PAGES
 ----------------------------------------------------------------------
-local pages = {}
-local tabButtons = {}
+local tabs = {}
+local currentTab = nil
 
 local function selectTab(name)
-	for pageName, page in pairs(pages) do
-		page.Visible = (pageName == name)
+	for _, t in ipairs(tabs) do
+		local active = (t.name == name)
+		t.active = active
+
+		if active and currentTab ~= name then
+			t.page.Visible = true
+			t.page.Position = UDim2.fromOffset(22, 0)
+			tween(t.page, { Position = UDim2.fromOffset(0, 0) }, 0.3, Enum.EasingStyle.Quint)
+			pageTitle.Text = t.name
+			pageSub.Text = t.subtitle
+		elseif not active then
+			t.page.Visible = false
+		end
+
+		tween(t.bg, { BackgroundTransparency = active and 0.82 or 1 }, 0.2)
+		tween(t.indicator, { Size = UDim2.fromOffset(3, active and 20 or 0) }, 0.25, Enum.EasingStyle.Back)
+		tween(t.label, { TextColor3 = active and C.text or C.sub }, 0.2)
 	end
-	for tabName, btn in pairs(tabButtons) do
-		local active = (tabName == name)
-		tween(btn, {
-			BackgroundColor3 = active and C.accent or C.side,
-			TextColor3 = active and Color3.new(1, 1, 1) or C.sub,
-		})
-	end
+	currentTab = name
 end
 
-local function createPage(name, order)
+local function createPage(name, icon, subtitle, order)
 	local page = new("ScrollingFrame", {
 		Name = name,
-		Size = UDim2.new(1, 0, 1, 0),
+		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		ScrollBarThickness = 4,
-		ScrollBarImageColor3 = C.stroke,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = C.accent,
 		CanvasSize = UDim2.new(),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
 		Visible = false,
-		Parent = content,
+		Parent = pagesHolder,
 	}, {
-		padding(12),
+		pad(4, 16, 18, 18),
 		new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
 	})
-	pages[name] = page
 
 	local tab = new("TextButton", {
 		Name = name,
-		Size = UDim2.new(1, 0, 0, 32),
-		BackgroundColor3 = C.side,
-		Text = name,
-		Font = FONT,
-		TextSize = 13,
-		TextColor3 = C.sub,
+		Size = UDim2.new(1, 0, 0, 40),
+		BackgroundTransparency = 1,
+		Text = "",
 		AutoButtonColor = false,
 		LayoutOrder = order,
-		Parent = sidebar,
-	}, { corner(6) })
-	tabButtons[name] = tab
+		Parent = tabsHolder,
+	})
+
+	local bg = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = C.accent,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Parent = tab,
+	}, { corner(10) })
+
+	local indicator = new("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		Size = UDim2.fromOffset(3, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+		Parent = tab,
+	}, { corner(2), gradient(C.accent, C.accent2, 90) })
+
+	new("TextLabel", {
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.fromOffset(24, 40),
+		BackgroundTransparency = 1,
+		Text = icon,
+		TextSize = 16,
+		Font = FONT,
+		Parent = tab,
+	})
+
+	local label = new("TextLabel", {
+		Position = UDim2.fromOffset(42, 0),
+		Size = UDim2.new(1, -46, 1, 0),
+		BackgroundTransparency = 1,
+		Text = name,
+		Font = FONT_MED,
+		TextSize = 13,
+		TextColor3 = C.sub,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = tab,
+	})
+
+	local entry = {
+		name = name,
+		subtitle = subtitle,
+		page = page,
+		bg = bg,
+		indicator = indicator,
+		label = label,
+		active = false,
+	}
+	table.insert(tabs, entry)
+
+	tab.MouseEnter:Connect(function()
+		if not entry.active then
+			tween(bg, { BackgroundTransparency = 0.93 }, 0.12)
+		end
+	end)
+	tab.MouseLeave:Connect(function()
+		if not entry.active then
+			tween(bg, { BackgroundTransparency = 1 }, 0.12)
+		end
+	end)
 	tab.MouseButton1Click:Connect(function()
 		selectTab(name)
 	end)
@@ -354,98 +730,195 @@ end
 ----------------------------------------------------------------------
 -- COMPONENTS
 ----------------------------------------------------------------------
-local layoutCounter = 0
-local function nextOrder()
-	layoutCounter += 1
-	return layoutCounter
-end
+local ROW_H = 58
 
 local function section(page, text)
+	local f = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 24),
+		BackgroundTransparency = 1,
+		LayoutOrder = nextOrder(),
+		Parent = page,
+	})
+	new("Frame", {
+		Position = UDim2.fromOffset(2, 9),
+		Size = UDim2.fromOffset(6, 6),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+		Parent = f,
+	}, { corner(3), gradient(C.accent, C.accent2, 45) })
 	new("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 18),
+		Position = UDim2.fromOffset(16, 0),
+		Size = UDim2.new(1, -16, 1, 0),
 		BackgroundTransparency = 1,
 		Text = string.upper(text),
 		Font = FONT_BOLD,
 		TextSize = 11,
 		TextColor3 = C.sub,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		LayoutOrder = nextOrder(),
-		Parent = page,
+		Parent = f,
 	})
 end
 
-local function button(page, text, callback, color)
-	color = color or C.card
-	local b = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 34),
-		BackgroundColor3 = color,
-		Text = text,
-		Font = FONT,
-		TextSize = 13,
-		TextColor3 = C.text,
-		AutoButtonColor = false,
+local function card(page, clickable)
+	local props = {
+		Size = UDim2.new(1, 0, 0, ROW_H),
+		BackgroundColor3 = C.card,
+		BorderSizePixel = 0,
 		LayoutOrder = nextOrder(),
 		Parent = page,
-	}, { corner(6) })
-	hover(b, color, color == C.danger and Color3.fromRGB(255, 110, 110) or C.cardHover)
-	b.MouseButton1Click:Connect(function()
+	}
+	local c
+	if clickable then
+		props.Text = ""
+		props.AutoButtonColor = false
+		c = new("TextButton", props, { corner(12), stroke(C.stroke, 1, 0.45) })
+		pressable(c, C.card, C.cardHover)
+	else
+		c = new("Frame", props, { corner(12), stroke(C.stroke, 1, 0.45) })
+	end
+	return c
+end
+
+local function badge(parent, icon, color)
+	new("Frame", {
+		Position = UDim2.fromOffset(10, 12),
+		Size = UDim2.fromOffset(34, 34),
+		BackgroundColor3 = color,
+		BackgroundTransparency = 0.82,
+		BorderSizePixel = 0,
+		Parent = parent,
+	}, {
+		corner(10),
+		new("TextLabel", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Text = icon,
+			TextSize = 17,
+			Font = FONT,
+		}),
+	})
+end
+
+local function rowText(parent, title, subtitle, rightPad)
+	local t = new("TextLabel", {
+		Position = UDim2.fromOffset(54, 10),
+		Size = UDim2.new(1, -(54 + rightPad), 0, 18),
+		BackgroundTransparency = 1,
+		Text = title,
+		Font = FONT_BOLD,
+		TextSize = 13,
+		TextColor3 = C.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = parent,
+	})
+	local s = new("TextLabel", {
+		Position = UDim2.fromOffset(54, 29),
+		Size = UDim2.new(1, -(54 + rightPad), 0, 16),
+		BackgroundTransparency = 1,
+		Text = subtitle or "",
+		Font = FONT,
+		TextSize = 11,
+		TextColor3 = C.sub,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = parent,
+	})
+	return t, s
+end
+
+-- Big clickable action row
+local function button(page, title, callback, subtitle, opts)
+	opts = opts or {}
+	local row = card(page, true)
+	badge(row, opts.icon or "✨", opts.color or C.accent)
+	rowText(row, title, subtitle, 44)
+	new("TextLabel", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		Size = UDim2.fromOffset(14, 20),
+		BackgroundTransparency = 1,
+		Text = ">",
+		Font = FONT_BOLD,
+		TextSize = 15,
+		TextColor3 = C.sub,
+		Parent = row,
+	})
+	row.MouseButton1Click:Connect(function()
 		if callback then
 			callback()
 		end
 	end)
-	return b
+	return row
 end
 
--- Label + text box + action button in one row
-local function inputRow(page, labelText, placeholder, buttonText, callback, color)
-	local row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 38),
-		BackgroundColor3 = C.card,
-		LayoutOrder = nextOrder(),
-		Parent = page,
-	}, { corner(6) })
+-- Row with a text box + Set button
+local function inputRow(page, title, subtitle, placeholder, buttonText, callback, opts)
+	opts = opts or {}
+	local row = card(page, false)
+	badge(row, opts.icon or "🔧", opts.color or C.accent)
+	rowText(row, title, subtitle, 176)
 
-	new("TextLabel", {
-		Size = UDim2.new(0, 110, 1, 0),
-		Position = UDim2.fromOffset(10, 0),
-		BackgroundTransparency = 1,
-		Text = labelText,
-		Font = FONT,
-		TextSize = 13,
-		TextColor3 = C.text,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Parent = row,
-	})
-
+	local boxStroke = stroke(C.stroke, 1, 0.2)
 	local box = new("TextBox", {
-		Size = UDim2.new(1, -230, 0, 26),
-		Position = UDim2.new(0, 120, 0.5, -13),
-		BackgroundColor3 = C.bg,
-		Text = "",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -86, 0.5, 0),
+		Size = UDim2.fromOffset(84, 32),
+		BackgroundColor3 = C.field,
+		Text = opts.default or "",
 		PlaceholderText = placeholder or "",
 		PlaceholderColor3 = C.sub,
-		Font = FONT,
+		Font = FONT_MED,
 		TextSize = 13,
 		TextColor3 = C.text,
 		ClearTextOnFocus = false,
 		Parent = row,
-	}, { corner(5), stroke() })
+	}, { corner(8), boxStroke })
 
-	local btnColor = color or C.accent
-	local b = new("TextButton", {
-		Size = UDim2.fromOffset(86, 26),
-		Position = UDim2.new(1, -94, 0.5, -13),
-		BackgroundColor3 = btnColor,
-		Text = buttonText or "Apply",
+	box.Focused:Connect(function()
+		tween(boxStroke, { Color = C.accent, Transparency = 0 }, 0.15)
+	end)
+	box.FocusLost:Connect(function(enterPressed)
+		tween(boxStroke, { Color = C.stroke, Transparency = 0.2 }, 0.15)
+		if enterPressed and callback then
+			callback(box.Text)
+		end
+	end)
+
+	if opts.numeric ~= false then
+		box:GetPropertyChangedSignal("Text"):Connect(function()
+			local cleaned = box.Text:gsub("[^%d%.%-]", "")
+			if cleaned ~= box.Text then
+				box.Text = cleaned
+			end
+		end)
+	end
+
+	local btn = new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -12, 0.5, 0),
+		Size = UDim2.fromOffset(66, 32),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Text = buttonText or "Set",
 		Font = FONT_BOLD,
 		TextSize = 12,
 		TextColor3 = Color3.new(1, 1, 1),
 		AutoButtonColor = false,
 		Parent = row,
-	}, { corner(5) })
-	hover(b, btnColor, btnColor:Lerp(Color3.new(1, 1, 1), 0.15))
+	}, { corner(8), gradient(C.accent, C.accent2, 45) })
 
-	b.MouseButton1Click:Connect(function()
+	local s = new("UIScale", { Parent = btn })
+	btn.InputBegan:Connect(function(input)
+		if isPress(input) then
+			tween(s, { Scale = 0.94 }, 0.08)
+		end
+	end)
+	btn.InputEnded:Connect(function(input)
+		if isPress(input) then
+			tween(s, { Scale = 1 }, 0.18, Enum.EasingStyle.Back)
+		end
+	end)
+	btn.MouseButton1Click:Connect(function()
 		if callback then
 			callback(box.Text)
 		end
@@ -454,100 +927,106 @@ local function inputRow(page, labelText, placeholder, buttonText, callback, colo
 	return box
 end
 
-local function toggle(page, text, callback)
+-- On / off switch row. Returns { Set = fn, SetSubtitle = fn }
+local function toggle(page, title, callback, subtitle, opts)
+	opts = opts or {}
 	local state = false
-
-	local row = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 38),
-		BackgroundColor3 = C.card,
-		Text = "",
-		AutoButtonColor = false,
-		LayoutOrder = nextOrder(),
-		Parent = page,
-	}, { corner(6) })
-	hover(row, C.card, C.cardHover)
-
-	new("TextLabel", {
-		Size = UDim2.new(1, -70, 1, 0),
-		Position = UDim2.fromOffset(10, 0),
-		BackgroundTransparency = 1,
-		Text = text,
-		Font = FONT,
-		TextSize = 13,
-		TextColor3 = C.text,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Parent = row,
-	})
+	local row = card(page, true)
+	badge(row, opts.icon or "⚙️", opts.color or C.accent)
+	local _, subLbl = rowText(row, title, subtitle, 76)
 
 	local track = new("Frame", {
-		Size = UDim2.fromOffset(40, 20),
-		Position = UDim2.new(1, -50, 0.5, -10),
-		BackgroundColor3 = C.bg,
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -14, 0.5, 0),
+		Size = UDim2.fromOffset(46, 26),
+		BackgroundColor3 = C.track,
+		BorderSizePixel = 0,
 		Parent = row,
-	}, { corner(10), stroke() })
+	}, { corner(13) })
+
+	local grad = new("UIGradient", {
+		Color = ColorSequence.new(C.accent, C.accent2),
+		Enabled = false,
+		Parent = track,
+	})
 
 	local knob = new("Frame", {
-		Size = UDim2.fromOffset(14, 14),
 		Position = UDim2.fromOffset(3, 3),
+		Size = UDim2.fromOffset(20, 20),
 		BackgroundColor3 = C.sub,
+		BorderSizePixel = 0,
 		Parent = track,
-	}, { corner(7) })
+	}, { corner(10) })
+
+	local function apply(on)
+		grad.Enabled = on
+		tween(track, { BackgroundColor3 = on and Color3.new(1, 1, 1) or C.track }, 0.18)
+		tween(knob, {
+			Position = on and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3),
+			BackgroundColor3 = on and Color3.new(1, 1, 1) or C.sub,
+		}, 0.22, Enum.EasingStyle.Back)
+	end
 
 	row.MouseButton1Click:Connect(function()
 		state = not state
-		tween(knob, {
-			Position = state and UDim2.fromOffset(23, 3) or UDim2.fromOffset(3, 3),
-			BackgroundColor3 = state and Color3.new(1, 1, 1) or C.sub,
-		})
-		tween(track, { BackgroundColor3 = state and C.accent or C.bg })
+		apply(state)
 		if callback then
 			callback(state)
 		end
 	end)
+
+	return {
+		Set = function(on)
+			state = on
+			apply(on)
+		end,
+		SetSubtitle = function(text)
+			subLbl.Text = text
+		end,
+	}
 end
 
 ----------------------------------------------------------------------
--- BUILD THE PAGES (empty for now - add UI inside each one later)
+-- MOVEMENT TAB (UI only for now)
 ----------------------------------------------------------------------
-local function emptyNote(page)
-	new("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 30),
-		BackgroundTransparency = 1,
-		Text = "Nothing here yet",
-		Font = FONT,
-		TextSize = 13,
-		TextColor3 = C.sub,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		LayoutOrder = nextOrder(),
-		Parent = page,
-	})
-end
-
 do
-	local movement = createPage("Movement", 1)
-	section(movement, "Stats")
-	inputRow(movement, "Speed", "16", "Set") -- function goes here later
-	inputRow(movement, "Jump", "50", "Set") -- function goes here later
-	section(movement, "Toggles")
-	toggle(movement, "Noclip") -- function goes here later
-	toggle(movement, "Fly") -- function goes here later
+	local page = createPage("Movement", "🏃", "Tweak how your character moves", 1)
 
-	local teleportation = createPage("Teleportation", 2)
-	local HOUSE_POSITION = Vector3.new(-64, 73, -41)
+	section(page, "Stats")
+	inputRow(page, "Speed", "Walk speed (default 16)", "16", "Set", nil, { icon = "💨", default = "16" })
+	inputRow(page, "Jump", "Jump power (default 50)", "50", "Set", nil, { icon = "🦘", default = "50" })
 
-	section(teleportation, "Places")
-	button(teleportation, "Teleport to House", function()
+	section(page, "Abilities")
+	toggle(page, "Noclip", nil, "Walk through walls", { icon = "👻" })
+	toggle(page, "Fly", nil, "Soar through the air", { icon = "🚀" })
+end
+
+----------------------------------------------------------------------
+-- TELEPORTATION TAB
+----------------------------------------------------------------------
+do
+	local page = createPage("Teleportation", "📍", "Jump to places instantly", 2)
+
+	section(page, "Places")
+	button(page, "Teleport to House", function()
 		local char = player.Character
 		local root = char and char:FindFirstChild("HumanoidRootPart")
 		if root then
 			root.CFrame = CFrame.new(HOUSE_POSITION)
+			toast("Teleported to House", C.good)
+		else
+			toast("Character not loaded", C.danger)
 		end
-	end)
+	end, "Position: -64, 73, -41", { icon = "🏠", color = C.good })
+end
 
-	local farm = createPage("Farm", 3)
+----------------------------------------------------------------------
+-- FARM TAB
+----------------------------------------------------------------------
+do
+	local page = createPage("Farm", "🌾", "Auto collect seeds and gems", 3)
 
-	-- Auto farms: teleport your character onto each target part, one after another
-	local TELEPORT_DELAY = 0.25 -- seconds between each part (raise it if some don't register)
+	local TELEPORT_DELAY = 0.25 -- seconds between each target (raise it if some don't register)
 	local GEM_NAMES = { Emerald = true, Ruby = true, Sapphire = true, Diamond = true }
 
 	local function getRoot()
@@ -555,8 +1034,8 @@ do
 		return char and char:FindFirstChild("HumanoidRootPart")
 	end
 
-	-- getTargets() returns a list of parts to visit. Returns start() and stop().
-	local function makeFarm(label, getTargets)
+	-- getTargets() returns parts/models to visit. onCount(n) reports how many were found.
+	local function makeFarm(label, getTargets, onCount)
 		local running = false
 
 		local function start()
@@ -568,19 +1047,23 @@ do
 
 			task.spawn(function()
 				while running do
+					local targets = getTargets()
+					if onCount then
+						onCount(#targets)
+					end
 					local didTeleport = false
 
-					for _, part in ipairs(getTargets()) do
+					for _, target in ipairs(targets) do
 						if not running then
 							break
 						end
 						local root = getRoot()
-						if root and part.Parent then
+						if root and target.Parent then
 							local cf
-							if part:IsA("BasePart") then
-								cf = part.CFrame
-							elseif part:IsA("Model") then
-								cf = part:GetPivot()
+							if target:IsA("BasePart") then
+								cf = target.CFrame
+							elseif target:IsA("Model") then
+								cf = target:GetPivot()
 							end
 							if cf then
 								root.CFrame = cf * CFrame.new(0, 2, 0)
@@ -611,7 +1094,6 @@ do
 	end
 
 	-- Gems: anything named Emerald / Ruby / Sapphire / Diamond anywhere in workspace
-	-- (parts or models, inside folders/models too). Skips your own character.
 	local function getGems()
 		local list = {}
 		local myChar = player.Character
@@ -625,24 +1107,44 @@ do
 		return list
 	end
 
-	local startSeeds, stopSeeds = makeFarm("Seeds", getSeeds)
-	local startGems, stopGems = makeFarm("Gems", getGems)
+	local SEED_DEFAULT = "Teleports to every seed in workspace.Seeds"
+	local GEM_DEFAULT = "Emerald, Ruby, Sapphire and Diamond"
 
-	section(farm, "Auto Farm")
-	toggle(farm, "Teleport to Seeds", function(state)
-		if state then
+	local seedToggle, gemToggle
+	local startSeeds, stopSeeds = makeFarm("Seeds", getSeeds, function(n)
+		if seedToggle then
+			seedToggle.SetSubtitle("Running  •  " .. n .. " found")
+		end
+	end)
+	local startGems, stopGems = makeFarm("Gems", getGems, function(n)
+		if gemToggle then
+			gemToggle.SetSubtitle("Running  •  " .. n .. " found")
+		end
+	end)
+
+	section(page, "Auto Farm")
+
+	seedToggle = toggle(page, "Seed Farm", function(on)
+		if on then
 			startSeeds()
+			toast("Seed farm enabled", C.good)
 		else
 			stopSeeds()
+			seedToggle.SetSubtitle(SEED_DEFAULT)
+			toast("Seed farm disabled", C.sub)
 		end
-	end)
-	toggle(farm, "Teleport to Gems", function(state)
-		if state then
+	end, SEED_DEFAULT, { icon = "🌱", color = C.good })
+
+	gemToggle = toggle(page, "Gem Farm", function(on)
+		if on then
 			startGems()
+			toast("Gem farm enabled", C.good)
 		else
 			stopGems()
+			gemToggle.SetSubtitle(GEM_DEFAULT)
+			toast("Gem farm disabled", C.sub)
 		end
-	end)
+	end, GEM_DEFAULT, { icon = "💎", color = C.accent2 })
 end
 
 selectTab("Movement")
@@ -650,39 +1152,70 @@ selectTab("Movement")
 ----------------------------------------------------------------------
 -- OPEN / CLOSE / MINIMIZE
 ----------------------------------------------------------------------
-local minimized = false
-
-minimizeBtn.MouseButton1Click:Connect(function()
-	minimized = not minimized
-	body.Visible = not minimized
-	tween(main, {
-		Size = minimized and UDim2.fromOffset(FULL_SIZE.X.Offset, TOP_HEIGHT) or FULL_SIZE,
-	}, 0.2)
-end)
-
--- Floating image button (shown when the panel is closed, draggable too)
 local openButton = new("ImageButton", {
 	Name = "OpenButton",
-	Size = UDim2.fromOffset(52, 52),
+	Size = UDim2.fromOffset(58, 58),
 	Position = UDim2.new(0, 16, 0.25, 0), -- upper-left, clear of thumbstick/jump button
-	BackgroundColor3 = C.top,
-	Image = "rbxassetid://9432874158",
-	ScaleType = Enum.ScaleType.Fit,
+	BackgroundColor3 = C.bg1,
+	Image = "",
 	AutoButtonColor = false,
 	Visible = false,
 	Parent = gui,
 }, {
-	corner(12),
-	stroke(C.accent, 2),
-	padding(6),
+	corner(16),
+	new("UIStroke", {
+		Color = Color3.new(1, 1, 1),
+		Thickness = 2,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, { gradient(C.accent, C.accent2, 45) }),
+	new("ImageLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.new(1, -16, 1, -16),
+		BackgroundTransparency = 1,
+		Image = OPEN_IMAGE,
+		ScaleType = Enum.ScaleType.Fit,
+	}),
 })
 
+local openScale = new("UIScale", { Parent = openButton })
+openButton.MouseEnter:Connect(function()
+	tween(openScale, { Scale = 1.1 }, 0.15, Enum.EasingStyle.Back)
+end)
+openButton.MouseLeave:Connect(function()
+	tween(openScale, { Scale = 1 }, 0.15)
+end)
+
+local isOpen = false
+local panelToken = 0
+
 local function setPanelOpen(open)
-	main.Visible = open
-	openButton.Visible = not open
+	isOpen = open
+	panelToken += 1
+	local token = panelToken
+
+	if open then
+		openButton.Visible = false
+		main.Visible = true
+		main.GroupTransparency = 1
+		uiScale.Scale = baseScale * 0.92
+		tween(main, { GroupTransparency = 0 }, 0.22)
+		tween(uiScale, { Scale = baseScale }, 0.28, Enum.EasingStyle.Back)
+	else
+		tween(main, { GroupTransparency = 1 }, 0.16)
+		tween(uiScale, { Scale = baseScale * 0.92 }, 0.16)
+		task.delay(0.17, function()
+			if panelToken == token then
+				main.Visible = false
+			end
+		end)
+		openScale.Scale = 0.6
+		openButton.Visible = true
+		tween(openScale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
+	end
 end
 
--- click (without dragging) opens the panel again
+-- clicking (without dragging) the image button opens the panel; it can be dragged too
 makeDraggable(openButton, openButton, function()
 	setPanelOpen(true)
 end)
@@ -691,17 +1224,27 @@ closeBtn.MouseButton1Click:Connect(function()
 	setPanelOpen(false)
 end)
 
--- On phones/tablets (no keyboard) start with just the button so the
--- panel doesn't cover the game; tap the button to open it.
-if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
-	setPanelOpen(false)
-end
+local minimized = false
+minimizeBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	tween(main, {
+		Size = minimized and UDim2.fromOffset(FULL_SIZE.X.Offset, HEADER_H) or FULL_SIZE,
+	}, 0.3, Enum.EasingStyle.Quint)
+end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then
 		return
 	end
 	if input.KeyCode == TOGGLE_KEY then
-		setPanelOpen(not main.Visible)
+		setPanelOpen(not isOpen)
 	end
 end)
+
+-- Phones/tablets (no keyboard) start with just the button so the panel
+-- doesn't cover the game. Everything else starts open.
+if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+	setPanelOpen(false)
+else
+	setPanelOpen(true)
+end
